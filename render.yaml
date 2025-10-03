@@ -7,11 +7,13 @@ services:
     buildCommand: pip install --no-cache-dir -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
-  - type: static_site
-    name: maeva-frontend
+
+staticSites:
+  - name: maeva-frontend
+    plan: free
     rootDir: frontend
     buildCommand: npm install && npm run build
-    staticPublishPath: dist
+    publishPath: dist
     envVars:
       - key: VITE_API_BASE_URL
         fromService:
