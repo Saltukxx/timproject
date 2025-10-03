@@ -8,6 +8,10 @@ interface UploadState {
   data: AnalysisResponse | null;
 }
 
+const apiClient = axios.create({
+  baseURL: import.meta.env.VITE_API_BASE_URL || ""
+});
+
 export function useAnalysis() {
   const [state, setState] = useState<UploadState>({
     loading: false,
@@ -20,7 +24,7 @@ export function useAnalysis() {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const response = await axios.post<AnalysisResponse>("/api/analyze", formData, {
+      const response = await apiClient.post<AnalysisResponse>("/api/analyze", formData, {
         headers: { "Content-Type": "multipart/form-data" }
       });
       setState({ loading: false, error: null, data: response.data });
@@ -33,4 +37,3 @@ export function useAnalysis() {
 
   return { ...state, upload };
 }
-
