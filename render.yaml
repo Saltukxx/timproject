@@ -1,3 +1,4 @@
+version: "1"
 services:
   - type: web
     name: maeva-backend
@@ -10,13 +11,6 @@ services:
 
 staticSites:
   - name: maeva-frontend
-    plan: free
     rootDir: frontend
     buildCommand: npm install && npm run build
     publishPath: dist
-    envVars:
-      - key: VITE_API_BASE_URL
-        fromService:
-          type: web
-          name: maeva-backend
-          property: url
