@@ -1,4 +1,3 @@
-version: "1"
 services:
   - type: web
     name: maeva-backend
@@ -8,9 +7,9 @@ services:
     buildCommand: pip install --no-cache-dir -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
-
-staticSites:
-  - name: maeva-frontend
+  - type: web
+    name: maeva-frontend
+    env: static
     rootDir: frontend
     buildCommand: npm install && npm run build
-    publishPath: dist
+    staticPublishPath: dist

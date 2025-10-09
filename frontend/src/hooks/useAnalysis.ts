@@ -8,8 +8,26 @@ interface UploadState {
   data: AnalysisResponse | null;
 }
 
+function normaliseBaseUrl(baseUrl: string | undefined | null) {
+  if (!baseUrl) return undefined;
+  const trimmed = baseUrl.trim();
+  if (!trimmed) return undefined;
+  return trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed;
+}
+
+function resolveApiBaseUrl() {
+  const fromEnv = normaliseBaseUrl(import.meta.env.VITE_API_BASE_URL);
+  if (fromEnv) return fromEnv;
+
+  const fromWindow = normaliseBaseUrl(window.__MAEVA_API_BASE__);
+  if (fromWindow) return fromWindow;
+
+  // Default to relative /api for setups that proxy API calls through the static host.
+  return "/api";
+}
+
 const apiClient = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || ""
+  baseURL: resolveApiBaseUrl()
 });
 
 export function useAnalysis() {
