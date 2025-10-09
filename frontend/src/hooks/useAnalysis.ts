@@ -27,9 +27,12 @@ function resolveApiBaseUrl() {
   return "/api";
 }
 
-const apiClient = axios.create({
-  baseURL: resolveApiBaseUrl()
-});
+function buildAnalyzeUrl() {
+  const baseUrl = resolveApiBaseUrl();
+  const sanitisedBase = baseUrl ? baseUrl.replace(/\/+$/, "") : "";
+  const effectiveBase = sanitisedBase || "/api";
+  return `${effectiveBase}/analyze`;
+}
 
 export function useAnalysis() {
   const [state, setState] = useState<UploadState>({
@@ -43,7 +46,7 @@ export function useAnalysis() {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const response = await apiClient.post<AnalysisResponse>("/api/analyze", formData, {
+      const response = await axios.post<AnalysisResponse>(buildAnalyzeUrl(), formData, {
         headers: { "Content-Type": "multipart/form-data" }
       });
       setState({ loading: false, error: null, data: response.data });
