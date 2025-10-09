@@ -12,6 +12,7 @@ function normaliseBaseUrl(baseUrl: string | undefined | null) {
   if (!baseUrl) return undefined;
   const trimmed = baseUrl.trim();
   if (!trimmed) return undefined;
+  if (trimmed === "%VITE_API_BASE_URL%") return undefined;
   return trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed;
 }
 

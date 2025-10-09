@@ -6,7 +6,13 @@
     <title>Maeva TCO Analyzer</title>
     <link rel="stylesheet" href="/src/styles/global.css" />
     <script>
-      window.__MAEVA_API_BASE__ = "%VITE_API_BASE_URL%";
+      (function() {
+        const apiBase = "%VITE_API_BASE_URL%";
+        if (!apiBase || apiBase === "%VITE_API_BASE_URL%") {
+          return;
+        }
+        window.__MAEVA_API_BASE__ = apiBase;
+      })();
     </script>
   </head>
   <body>
