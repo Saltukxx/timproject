@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 from openpyxl import load_workbook
 
+from ..config import settings
+
 
 TechnologyKey = Literal["diesel", "lng", "bev"]
 
@@ -149,9 +151,14 @@ class ExcelProcessor:
         tours_df = self._load_tours()
         vehicles_df = self._load_vehicles()
 
-        tours_df["starttime"] = pd.to_datetime(tours_df["starttime"], errors="coerce")
-        tours_df = tours_df.dropna(subset=["starttime"])
-        tours_df["date"] = tours_df["starttime"].dt.date
+        tours_df = self._prepare_tours(
+            tours=tours_df,
+            vehicles=vehicles_df,
+            energy_limit=energy_limit,
+        )
+
+        if not period_months or period_months <= 0:
+            period_months = self._infer_period_months(tours_df)
 
         tours_df["feasible tour"] = tours_df["feasible tour"].fillna(0).astype(int)
         tours_df["feasible day"] = tours_df["feasible day"].fillna(0).astype(int)
@@ -288,6 +295,113 @@ class ExcelProcessor:
         )
         return payload
 
+    def _prepare_tours(
+        self,
+        *,
+        tours: pd.DataFrame,
+        vehicles: pd.DataFrame,
+        energy_limit: float,
+    ) -> pd.DataFrame:
+        df = tours.copy()
+
+        df["starttime"] = (
+            pd.to_datetime(df["starttime"], errors="coerce", utc=True)
+            .dt.tz_convert(None)
+        )
+        df["endtime"] = (
+            pd.to_datetime(df.get("endtime"), errors="coerce", utc=True)
+            .dt.tz_convert(None)
+        )
+        df = df.dropna(subset=["starttime"])
+        df["date"] = df["starttime"].dt.date
+
+        vehicles_map = (
+            vehicles.set_index("vehicleid")["fueltypes"].to_dict()
+        )
+        df["_fueltypes"] = df["vehicleid"].map(vehicles_map).fillna("unknown")
+
+        multipliers = {
+            "diesel": 5.0,
+            "lng": 7.0,
+            "electric": 1.0,
+            "bev": 1.0,
+        }
+        df["_fuel_multiplier"] = df["_fueltypes"].map(multipliers).fillna(0.0)
+
+        df["fuelconsumption"] = pd.to_numeric(df["fuelconsumption"], errors="coerce")
+        df["mileage"] = pd.to_numeric(df["mileage"], errors="coerce")
+
+        df["estimated electricity consumption (kWh)"] = (
+            df["fuelconsumption"].fillna(0.0) * df["_fuel_multiplier"]
+        )
+
+        energy_series = df["estimated electricity consumption (kWh)"]
+        df["feasibility by tourid"] = np.where(
+            energy_series.notna(),
+            np.where(energy_series <= energy_limit, "yes", "no"),
+            "",
+        )
+        df["feasible tour"] = np.where(
+            energy_series.notna(),
+            np.where(energy_series <= energy_limit, 1, 0),
+            0,
+        )
+        df["infeasible tour"] = np.where(
+            energy_series.notna(),
+            np.where(energy_series > energy_limit, 1, 0),
+            0,
+        )
+
+        df = df.sort_values(["vehicleid", "date", "starttime", "tourid"]).reset_index(drop=True)
+
+        grouped_keys = ["vehicleid", "date"]
+        daily_energy = (
+            df.groupby(grouped_keys)["estimated electricity consumption (kWh)"]
+            .transform("sum")
+        )
+        df["_daily_total_energy"] = daily_energy
+
+        sequence = df.groupby(grouped_keys).cumcount()
+        group_sizes = df.groupby(grouped_keys)["tourid"].transform("size")
+        is_last_of_day = sequence == (group_sizes - 1)
+
+        df["estimated electricity daily consumption (kWh)"] = np.where(
+            is_last_of_day,
+            df["_daily_total_energy"],
+            np.nan,
+        )
+        df["feasibility by day"] = np.where(
+            is_last_of_day,
+            np.where(df["_daily_total_energy"] <= energy_limit, "yes", "no"),
+            "",
+        )
+        df["feasible day"] = np.where(
+            is_last_of_day,
+            np.where(df["_daily_total_energy"] <= energy_limit, 1, 0),
+            0,
+        )
+        df["infeasible day"] = np.where(
+            is_last_of_day,
+            np.where(df["_daily_total_energy"] > energy_limit, 1, 0),
+            0,
+        )
+
+        df.drop(columns=["_fueltypes", "_fuel_multiplier", "_daily_total_energy"], inplace=True)
+        return df
+
+    @staticmethod
+    def _infer_period_months(tours_df: pd.DataFrame) -> float:
+        if tours_df.empty:
+            return 0.0
+        start = tours_df["starttime"].min()
+        end = tours_df["starttime"].max()
+        if pd.isna(start) or pd.isna(end):
+            return 0.0
+        delta_days = (end - start).days
+        if delta_days <= 0:
+            return 1.0
+        return max(delta_days / 30.0, 1.0)
+
     def _build_insights(
         self,
         *,
@@ -357,7 +471,7 @@ class ExcelProcessor:
             ),
         }
 
-    def _read_parameters(self) -> tuple[float, float, Dict[TechnologyKey, TechnologyParameters]]:
+    def _read_parameters(self) -> tuple[float, Optional[float], Dict[TechnologyKey, TechnologyParameters]]:
         wb = load_workbook(
             filename=self.workbook_path,
             read_only=True,
@@ -366,8 +480,22 @@ class ExcelProcessor:
         )
         try:
             tours_sheet = wb["tours"]
-            energy_limit = float(tours_sheet["AE1"].value or 0)
-            period_months = float(tours_sheet["AG3"].value or 12)
+            raw_energy_limit = tours_sheet["AE1"].value
+            energy_limit = (
+                float(raw_energy_limit)
+                if raw_energy_limit not in (None, "")
+                else settings.default_energy_limit_kwh
+            )
+
+            raw_period_months = tours_sheet["AG3"].value
+            period_months: Optional[float]
+            if raw_period_months in (None, ""):
+                period_months = None
+            else:
+                try:
+                    period_months = float(raw_period_months)
+                except (TypeError, ValueError):
+                    period_months = None
 
             tco_sheet = wb["TCO-calculation"]
             rows_map = {
@@ -414,10 +542,11 @@ class ExcelProcessor:
         return energy_limit, period_months, parameters
 
     def _load_tours(self) -> pd.DataFrame:
-        usecols = [
+        base_columns = [
             "tourid",
             "vehicleid",
             "starttime",
+            "endtime",
             "mileage",
             "fuelconsumption",
             "estimated electricity consumption (kWh)",
@@ -428,9 +557,13 @@ class ExcelProcessor:
         df = pd.read_excel(
             self.workbook_path,
             sheet_name="tours",
-            usecols=usecols,
         )
-        return df
+
+        missing_columns = [col for col in base_columns if col not in df.columns]
+        for col in missing_columns:
+            df[col] = np.nan
+
+        return df[base_columns]
 
     def _load_vehicles(self) -> pd.DataFrame:
         df = pd.read_excel(
@@ -438,8 +571,25 @@ class ExcelProcessor:
             sheet_name="vehicles",
             usecols=["vehicleid", "licenseno", "fueltypes"],
         )
-        df["fueltypes"] = df["fueltypes"].str.lower()
+        df["fueltypes"] = df["fueltypes"].apply(self._normalise_fuel_type)
         return df
+
+    @staticmethod
+    def _normalise_fuel_type(value: Optional[str]) -> str:
+        if not isinstance(value, str):
+            return "unknown"
+        text = value.strip().lower()
+        if not text or text in {"{}", "nan"}:
+            return "unknown"
+        if "lng" in text:
+            return "lng"
+        if "diesel" in text:
+            return "diesel"
+        if "electric" in text or "bev" in text:
+            return "electric"
+        if "petrol" in text or "gasoline" in text:
+            return "petrol"
+        return text
 
     @staticmethod
     def _aggregate_vehicle_metrics(df: pd.DataFrame) -> pd.DataFrame:
